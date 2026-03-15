@@ -8,14 +8,14 @@ module.exports = {
   config: {
     name: "rankup",
     version: "1.1.1",
-    author: "Mirai Team + Modified",
+    author: "VincentSensei",
     description: {
       vi: "Thông báo rankup cho từng nhóm",
       en: "Rankup notification for each group"
     },
     category: "system",
     usage: "rankup [on/off]",
-    role: 1
+    role: 0
   },
 
   langs: {
@@ -35,17 +35,19 @@ module.exports = {
     }
   },
 
-  onStart: async function({ api, event, threadsData, args, getLang }) {
-    const { threadID, messageID } = event;
+  onStart: async function({ message, event, threadsData, args, getLang, role }) {
+    const { threadID } = event;
     
     // Show current status if no args
     if (!args[0]) {
       const rankupEnabled = await threadsData.get(threadID, "settings.rankupEnabled");
       const status = rankupEnabled ? "ON" : "OFF";
-      return api.sendMessage(`📊 Rankup Status: ${status}\nUse: rankup [on/off]`, threadID, messageID);
+      return message.reply(`📊 Rankup Status: ${status}\nUse: rankup [on/off] (Admins only)`);
     }
     
     if (args[0] === "on" || args[0] === "off") {
+      if (role < 1) return message.reply("❌ Only group admins can toggle the rankup settings.");
+      
       const isOn = args[0] === "on";
       await threadsData.set(threadID, isOn, "settings.rankupEnabled");
       
@@ -53,10 +55,10 @@ module.exports = {
       const defaultMsg = getLang("levelup");
       await threadsData.set(threadID, defaultMsg, "data.rankup.message");
       
-      return api.sendMessage(`${isOn ? getLang("on") : getLang("off")} ${getLang("successText")}`, threadID, messageID);
+      return message.reply(`${isOn ? getLang("on") : getLang("off")} ${getLang("successText")}`);
     }
     
-    return api.sendMessage(`Usage: rankup [on/off]`, threadID, messageID);
+    return message.reply(`Usage: rankup [on/off]`);
   },
 
   onChat: async function({ api, event, usersData, threadsData, message, getLang }) {
@@ -75,10 +77,11 @@ module.exports = {
     // Update exp
     await usersData.set(senderID, { exp });
     
-    // Calculate level before and after
+    // Calculate level before and after using Goatbot's standard formula
+    const deltaNext = 5;
     const prevExp = Math.max(0, exp - 1);
-    const prevLevel = Math.floor((Math.sqrt(1 + (4 * prevExp / 3) + 1) / 2));
-    const currentLevel = Math.floor((Math.sqrt(1 + (4 * exp / 3) + 1) / 2));
+    const prevLevel = Math.floor((1 + Math.sqrt(1 + 8 * prevExp / deltaNext)) / 2);
+    const currentLevel = Math.floor((1 + Math.sqrt(1 + 8 * exp / deltaNext)) / 2);
 
     // Check if leveled up (current level > previous level, and not level 1)
     if (currentLevel > prevLevel && currentLevel !== 1) {
@@ -102,15 +105,38 @@ module.exports = {
       };
 
       try {
-        const { getStreamFromURL } = global.utils;
-        const stream = await getStreamFromURL(`https://rankup-api-b1rv.vercel.app/api/rankup?uid=${senderID}`);
-        stream.path = 'rankup.gif';
-        replyBody.attachment = stream;
-      } catch (e) {
-        console.error("Error loading rankup image from API:", e);
-      }
+        const axios = require("axios");
+        const fs = require("fs-extra");
+        const path = require("path");
+        const imgPath = path.join(__dirname, `rankup_${senderID}_${Date.now()}.png`);
 
-      message.reply(replyBody);
+        const response = await axios({
+            url: `https://rankup-api-b1rv.vercel.app/api/rankup?uid=${senderID}`,
+            method: 'GET',
+            responseType: 'stream',
+            timeout: 10000 // 10 second timeout
+        });
+
+        const writer = fs.createWriteStream(imgPath);
+        response.data.pipe(writer);
+
+        await new Promise((resolve, reject) => {
+            writer.on('finish', resolve);
+            writer.on('error', reject);
+        });
+
+        replyBody.attachment = fs.createReadStream(imgPath);
+
+        await message.reply(replyBody);
+
+        // Cleanup image
+        fs.unlink(imgPath).catch(console.error);
+
+      } catch (e) {
+        console.error("Error loading rankup image from API:", e.message);
+        // Fallback to sending just text if the image fails to generate
+        await message.reply(replyBody);
+      }
     }
   }
 };
